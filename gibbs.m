@@ -1,14 +1,23 @@
-function [theta, phi, avetheta, avephi] = gibbs(alpha, beta, Doc, T, W, Iter, BURN_IN, Sampler_lag)
+function [theta, phi, avetheta, avephi, L] = gibbs(alpha, beta, Doc, T, W, Iter, BURN_IN, Sampler_lag)
 % This function implements gibbs sampling
 % This gibbs sampler is defined as a class
-% member variable : 
-%	W:= size of vocabulary
-%	T:= number of topics
-%	Doc:= Docment list
-%	D:= Total number of documents
-%	alpha, beta:= Dirichlet Distribution parameter
-% optional:
+% @param W
+%	size of vocabulary
+% @param T	
+%       number of topics
+% @param Doc	
+%	Docment list
+% @param alpha, beta
+%	Dirichlet Distribution parameter
+% @param
 %	Iter:= iterations
+%	BURN_IN:= number of iteratoins required before Markov Chain reaches equilibrium 
+%	Sampler_lag:= interval between two samplings
+
+% @return theta, avetheta
+%	topic distribution for documents, D-by-T matrix
+% @return phi, avephi
+%	words distribution in each topics, W-by-T matrix
 
 % Step 1. 
 % 	Define z to be a D-by-W matrix 
@@ -41,102 +50,154 @@ function [theta, phi, avetheta, avephi] = gibbs(alpha, beta, Doc, T, W, Iter, BU
     % thetasum:= sum of topic distribution for each document 
     % phisum:= sum of words distribution for each topic
     theta = zeros(D,T);
-    phi = zeros(T,W);
+    phi = zeros(W,T);
     thetasum = zeros(D,T);
-    phisum = zeros(T,W);
+    phisum = zeros(W,T);
+    % loglikelihood
+    L = [];
+    lconst = T*(gammaln(W*beta) - W*gammaln(beta)); % constant for calculating L
+    tmp = LogLikelihood;
+    L = [L;tmp];
     % number of times updating parameter
     numstat = 0;
     % iteration parameter
-    BURN_IN = 100;
+    %BURN_IN = 100;
+    showlist = [10,20,50,150,300,400,500];
+    displaycount = 1;
+    l = length(showlist);
+    figure;
     for i = 1:Iter
-	for d = 1:D
-            N = length(Doc{d,1});
-	    for w = 1:N
-		z{d,1}(w) = PosteriorSampling(d,w,z);
-	    end
-	end    
-	if ((i >= BURN_IN && Sampler_lag > 0) && mod(i,Sampler_lag) == 0)
-	    theta = Updatetheta();
-	    phi = Updataphi();
-	    thetasum = thetasum + theta;
- 	    phisum = phisum + phi;
-	end
+        if (mod(i,100) == 0)
+            disp([num2str(i),'th Iteration'])
+        end
+        for d = 1:D
+                N = length(Doc{d,1});
+            for w = 1:N
+                z{d,1}(w) = PosteriorSampling(d,w,z);
+            end
+        end   
+        %{
+        if ((i >= BURN_IN && Sampler_lag > 0) && mod(i,Sampler_lag) == 0)
+            [theta, phi] = UpdateParam;
+            thetasum = thetasum + theta;
+            phisum = phisum + phi;
+        end
+        %}
+        % For the purpose of experiment
+        % record parameter
+        % visualize document
+        % calculate loglikelihood and visualize
+        if (mod(i,Sampler_lag) == 0)
+            % update parameter
+            [theta, phi] = UpdateParam;
+            thetasum = thetasum + theta;
+            phisum = phisum + phi;  
+            % update loglikelihood
+            tmp = LogLikelihood;
+            L = [L;tmp];
+        end
+        if ( i == showlist(displaycount) )
+            for j = 1:10
+                subplot(l,10,j+10*(displaycount-1));
+                im = reshape(phi(:,j),5,5);
+                imagesc(im), colormap gray%, title(['topic',num2str(j)]);
+            end
+            %suptitle([num2str(i),'iteration']);
+            displaycount = displaycount + 1;
+        end
     end
     avetheta = thetasum/numstat;
     avephi = phisum/numstat;
-end
 
-% @brief Initialize Markoc Chain
-% @param T
-%	  number of topic
-function z = InitialMarkovChain(T)
-    z = cell(D,1);
-    for d = 1:D
-	N = length(Doc{d,1});
-	% ndsum:= number of words assigned in document d
-        ndsum(d) = N;
-	for word = 1:N   
-	    % randomly initialize topic assigment
-	    topic = floor(rand(1,N)*T + 0.5);
-	    z{d,1}(word) = topic;
-	    % nw:= number of times Words i have been assigned to Topic j
-	    nw(Doc{d,1}(word),topic) = nw(Doc{d,1}(word),topic) + 1;
-	    % nd:= number of times Topic j has been assigned to Document i
-    	    nd(d,topic) = nd(d,topic) + 1; 
-	    % nwsum:= total number of words assgined to Topic j
-            nwsum(topic) = nwsum(topic) + 1;
-	end
-    end	
-end
-
-% @brief sample topic assginment for Word w in Document d
-% @param d
-%	  document
-% @param w
-% 	  word
-function assignment = PosteriorSampling(d,w)
-    % First remove current assigment of Word w from the count
-    currentTopic = z{d,1}(w);
-    nw(Doc{d,1}(w),currentTopic) = nw(Doc{d,1}(w),currentTopic) - 1;
-    nd(d,currentTopic) = nd(d,currentTopic) - 1;
-    nwsum(currentTopic) = nwsum(currentTopic) - 1;
-    ndsum(d) = ndsum(d) - 1;
-    % Second calculate multinomial posterior conditioned on all the other assignments
-    % and cumulate this distribution
-    for topic = 1:T
-    	prob(topic) = (nw(Doc{d,1}(w),currentTopic) + beta)/(nwsum(currentTopic) + W*beta) *...
-		      (nd(d,currentTopic) + alpha)/(ndsum(d) + T*alpha) ; 
-	if (topic >= 2)
-	    prob(topic) = prob(topic) + prob(topic-1);
-	end
+    % @brief Initialize Markoc Chain
+    % @param T
+    %	  number of topic
+    function assignment = InitialMarkovChain(T)
+        assignment = cell(D,1);
+        for docidx = 1:D
+            n = length(Doc{docidx,1});
+            % ndsum:= number of words assigned in document d
+            ndsum(docidx) = n;
+            assignment{docidx,1} = zeros(1,n);
+            for wordidx = 1:n   
+                % randomly initialize topic assigment
+                t = ceil(rand*T);
+                assignment{docidx,1}(wordidx) = t;
+                %keyboard;
+                % nw:= number of times word i have been assigned to Topic j
+                nw(Doc{docidx,1}(wordidx),t) = nw(Doc{docidx,1}(wordidx),t) + 1;
+                % nd:= number of times Topic j has been assigned to Document i
+                nd(docidx,t) = nd(docidx,t) + 1; 
+                % nwsum:= total number of words assgined to Topic j
+                nwsum(t) = nwsum(t) + 1;
+            end
+        end	
     end
-    % Third sample from this distribution 
-    u = rand*prob(T);
-    for assignment = 1:T
-	if(u < prob(assignment)
-	    break;
-	end
-    end
-    % Finally update count
-    nw(Doc{d,1}(w),assignment) = nw(Doc{d,1}(w),assignment) + 1;
-    nd(d,assignment) = nd(d,assignment) + 1;
-    nwsum(assignment) = nwsum(assignment) + 1;
-    ndsum(d) = ndsum(d) + 1;
-end
 
-% @brief update topic distribution theta and topic phi, and record number of updates
-% @theta: D-by-T matrix
-% @phi: W-by-T matrix
-function phi = UpdateParam()
-    theta = zeros(D,T);
-    phi = zeros(W,T);
-    for topic = 1:T
-	theta(:,topic) = (nd(:,topic) + alpha)./(ndsum + T*alpha);
-	phi(:,topic) = (nw(:,topic) + beta)/(nwsum(topic) + W*beta);
+    % @brief sample topic assginment for Word w in Document d
+    % @param d
+    %	  document
+    % @param w
+    % 	  word
+    function assignment = PosteriorSampling(docidx,wordidx,currentAssignment)
+        % First remove current assigment of Word w from the count
+        currentTopic = currentAssignment{docidx,1}(wordidx);
+        vocidx = Doc{docidx,1}(wordidx);
+        nw(vocidx,currentTopic) = ...
+                            nw(vocidx,currentTopic) - 1;
+        nd(docidx,currentTopic) = nd(docidx,currentTopic) - 1;
+        nwsum(currentTopic) = nwsum(currentTopic) - 1;
+        ndsum(docidx) = ndsum(docidx) - 1;
+        % Second calculate multinomial posterior conditioned on 
+        % all the other assignments and cumulate this distribution
+        prob = zeros(T,1);
+        for t = 1:T
+            prob(t) = (nw(vocidx,t) + beta)/(nwsum(t) + W*beta) *...
+                      (nd(docidx,t) + alpha)/(ndsum(docidx) + T*alpha); 
+            if (t >= 2)
+                prob(t) = prob(t) + prob(t-1);
+            end
+        end
+        % Third sample from this distribution 
+        u = rand*prob(T);
+        for assignment = 1:T
+            if(u < prob(assignment))
+                break;
+            end
+        end
+        % Finally update count
+        nw(vocidx,assignment) = nw(vocidx,assignment) + 1;
+        nd(docidx,assignment) = nd(docidx,assignment) + 1;
+        nwsum(assignment) = nwsum(assignment) + 1;
+        ndsum(docidx) = ndsum(docidx) + 1;
     end
-    numstat = numstat + 1;
-end
 
+    % @brief update topic distribution theta and topic phi, 
+    %        and record number of updates
+    % @theta: D-by-T matrix
+    % @phi: W-by-T matrix
+    function [theta, phi] = UpdateParam
+        theta = zeros(D,T);
+        phi = zeros(W,T);
+        for t = 1:T
+            for docidx = 1:D
+                theta(docidx,t) =...
+                    (nd(docidx,t) + alpha)/(ndsum(docidx) + T*alpha);
+            end
+            for wordidx = 1:W
+                phi(wordidx,t) =...
+                    (nw(wordidx,t) + beta)/(nwsum(t) + W*beta);
+            end
+        end
+            numstat = numstat + 1;
+    end
+    
+    % @brief calculate loglikelihood log(p(w|z))
+    function l = LogLikelihood
+        ltmp = sum(sum(gammaln(nw + beta),1) - gammaln(nwsum' + W*beta)); 
+        l = lconst + ltmp;
+    end
+end
 
 
 
